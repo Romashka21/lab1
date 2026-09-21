@@ -20,13 +20,16 @@ public static class IncidentEndpoints
             .WithName("GetIncidentDetails")
             .Produces<IncidentDetailsResponse>()
             .ProducesProblem(StatusCodes.Status404NotFound);
+        
+        group.MapGet("/severity-summary", async (IncidentQueries queries, CancellationToken cancellationToken) =>
+        {
+            var summary = await queries.GetSeveritySummaryAsync(cancellationToken);
+            return Results.Ok(summary);
+        })
+        .WithName("GetSeveritySummary")
+        .Produces<IReadOnlyList<IncidentSeveritySummaryResponse>>();
 
-        group.MapGet("/severity-summary", () => Results.Problem(
-                title: "Точку розширення ще не реалізовано",
-                detail: "Завершіть цей endpoint під час лабораторної роботи № 1.",
-                statusCode: StatusCodes.Status501NotImplemented))
-            .WithName("GetIncidentSeveritySummary")
-            .ProducesProblem(StatusCodes.Status501NotImplemented);
+        
 
         return endpoints;
     }
