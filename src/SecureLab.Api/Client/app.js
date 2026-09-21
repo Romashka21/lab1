@@ -109,3 +109,37 @@ filterForm.addEventListener("submit", (event) => {
 });
 
 loadIncidents();
+
+document.getElementById('load-summary-btn')?.addEventListener('click', async () => {
+    const statusEl = document.getElementById('summary-status');
+    const listEl = document.getElementById('summary-list');
+
+    // 1. Стан «Завантаження...» та очищення попередніх результатів
+    listEl.textContent = '';
+    statusEl.textContent = 'Завантаження...';
+
+    try {
+        // 2. Виклик API
+        const summary = await apiFetch('/api/incidents/severity-summary');
+        
+        statusEl.textContent = ''; // Прибираємо напис "Завантаження"
+
+        // 3. Обробка порожнього масиву
+        if (summary.length === 0) {
+            statusEl.textContent = 'Даних немає';
+            return;
+        }
+
+        // 4. Безпечне створення елементів (захист від XSS)
+        summary.forEach(item => {
+            const li = document.createElement("li");
+            li.textContent = `${item.severity}: ${item.count}`;
+            listEl.append(li);
+        });
+
+    } catch (error) {
+        // 5. Коротке безпечне повідомлення про помилку
+        statusEl.textContent = 'Не вдалося завантажити дані підсумку.';
+        console.error('Помилка завантаження summary:', error);
+    }
+});
