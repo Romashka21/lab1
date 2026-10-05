@@ -10,38 +10,66 @@ public static class Lab02Endpoints
 {
     public static void MapLab02Endpoints(this WebApplication app)
     {
-        // 1. ВРАЗЛИВИЙ ПОШУК (SCAFFOLD STATE) - ЗАЛИШАЄМО БЕЗ ЗМІН ДЛЯ ЕТАПУ 3
+        // 1. БЕЗПЕЧНИЙ ПОШУК (ЕТАП 4): значення q іде параметром, структуру запиту обирає allowlist
         app.MapGet("/api/incidents/search", async (string? q, string? sortBy, SecureLabDbContext db, CancellationToken ct) =>
         {
-            var sortExpression = sortBy switch 
-            { 
-                null or "" or "createdAtUtc" => "created_at_utc DESC", 
-                _ => sortBy 
+            // allowlist: порожнє або відсутнє значення означає createdAtUtc, усе інше поза переліком -> 400
+            var sortKey = string.IsNullOrEmpty(sortBy) ? "createdAtUtc" : sortBy;
+            if (sortKey is not ("createdAtUtc" or "severity" or "status"))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["sortBy"] = ["Допустимі значення: createdAtUtc, severity, status."]
+                });
+            }
+
+            // значення пошуку: екрануємо %, _, \ і передаємо ОКРЕМО від тексту SQL (параметр @pattern)
+            var pattern = "%" + EscapeLike(q ?? "") + "%";
+
+            var found = db.Incidents
+                .AsNoTracking()
+                .Where(incident => EF.Functions.ILike(incident.Title, pattern, "\\")
+                                   || EF.Functions.ILike(incident.Description, pattern, "\\"));
+
+            IQueryable<Incident> ordered = sortKey switch
+            {
+                "severity" => found
+                    .OrderBy(incident => incident.Severity == IncidentSeverity.Critical ? 0 :
+                                         incident.Severity == IncidentSeverity.High ? 1 :
+                                         incident.Severity == IncidentSeverity.Medium ? 2 : 3)
+                    .ThenBy(incident => incident.Id),
+                "status" => found
+                    .OrderBy(incident => incident.Status == IncidentStatus.New ? 0 :
+                                         incident.Status == IncidentStatus.Triaged ? 1 :
+                                         incident.Status == IncidentStatus.InProgress ? 2 :
+                                         incident.Status == IncidentStatus.Resolved ? 3 : 4)
+                    .ThenBy(incident => incident.Id),
+                _ => found
+                    .OrderByDescending(incident => incident.CreatedAtUtc)
+                    .ThenBy(incident => incident.Id)
             };
 
-            var sql = "SELECT * FROM incidents WHERE title ILIKE '%" + (q ?? "") + "%' OR description ILIKE '%" + (q ?? "") + "%' ORDER BY " + sortExpression;
-
-            // Цей рядок виконує SQL-ін'єкцію, змішуючи дані та структуру
-            var incidents = await db.Incidents.FromSqlRaw(sql).ToListAsync(ct);
-
-            var items = incidents.Select(incident => new IncidentListItemResponse(
-                incident.Id,
-                incident.Title,
-                incident.Severity.ToString(),
-                incident.Status.ToString(),
-                incident.OccurredAtUtc,
-                incident.CreatedAtUtc));
+            var items = await ordered
+                .Take(50)
+                .Select(incident => new IncidentListItemResponse(
+                    incident.Id,
+                    incident.Title,
+                    incident.Severity.ToString(),
+                    incident.Status.ToString(),
+                    incident.OccurredAtUtc,
+                    incident.CreatedAtUtc))
+                .ToListAsync(ct);
 
             return Results.Ok(items);
         });
 
-        // 2. ЗАХИЩЕНИЙ POST (ЕТАП 2 - НА ОЦІНКУ "ВІДМІННО")
+        // 2. ЗАХИЩЕНИЙ POST (ЕТАП 2)
         app.MapPost("/api/incidents", async (CreateIncidentRequest request, SecureLabDbContext db, CancellationToken ct) =>
         {
             var now = DateTimeOffset.UtcNow;
             var errors = new Dictionary<string, string[]>();
 
-            // 1. Базові перевірки (вимірюємо довжину ДО Trim)
+            // 1. Базові перевірки (довжину міряємо на надісланому значенні, до Trim)
             if (string.IsNullOrWhiteSpace(request.Title))
                 errors["title"] = ["Назва обов'язкова."];
             else if (request.Title.Length > 160)
@@ -52,51 +80,54 @@ public static class Lab02Endpoints
             else if (request.Description.Length > 4000)
                 errors["description"] = ["Опис не повинен перевищувати 4000 символів."];
 
-            // 2. Перевірка Enum (захищає від числових значень типу "7")
-            var severityIsValid = Enum.TryParse<IncidentSeverity>(request.Severity, ignoreCase: true, out var severity)
+            // 2. Enum: TryParse + IsDefined (відхиляє "7"); кому відсікаємо окремо ("Medium, High")
+            IncidentSeverity severity = default;
+            var severityIsValid = request.Severity is not null
+                                  && !request.Severity.Contains(',')
+                                  && Enum.TryParse(request.Severity, ignoreCase: true, out severity)
                                   && Enum.IsDefined(severity);
             if (!severityIsValid)
                 errors["severity"] = ["Допустимі значення: Low, Medium, High, Critical."];
 
-            // 3. Перевірка дати (не далі ніж +5 хв)
+            // 3. Дата (не далі ніж +5 хв від серверного UTC now)
             if (request.OccurredAtUtc is null)
                 errors["occurredAtUtc"] = ["Час виникнення обов'язковий."];
             else if (request.OccurredAtUtc > now.AddMinutes(5))
                 errors["occurredAtUtc"] = ["Час виникнення не може бути в майбутньому більш ніж на 5 хвилин."];
 
-            // Нормалізація полів по одному разу
+            // Нормалізація один раз
             var title = request.Title?.Trim() ?? "";
             var description = request.Description?.Trim() ?? "";
 
-            // 4. Cross-field правило (Т-09): для High/Critical довжина опису >= 40 символів
-            if (severityIsValid && (severity == IncidentSeverity.High || severity == IncidentSeverity.Critical))
+            // 4. Cross-field (T-09): High/Critical -> опис після Trim не коротший за 40
+            if (severityIsValid
+                && (severity == IncidentSeverity.High || severity == IncidentSeverity.Critical)
+                && !errors.ContainsKey("description")
+                && description.Length < 40)
             {
-                if (description.Length < 40)
-                    errors["description"] = ["Для рівнів High та Critical опис має містити щонайменше 40 символів."];
+                errors["description"] = ["Для рівнів High та Critical опис має містити щонайменше 40 символів."];
             }
 
-            // 5. Додаткове предметне правило на "Відмінно" (Т-10): опис не дорівнює назві
+            // 5. Додаткове правило (T-10): опис не може збігатися з назвою
             if (!errors.ContainsKey("description") && description.Equals(title, StringComparison.Ordinal))
-            {
                 errors["description"] = ["Опис не може повністю збігатися з назвою інциденту."];
-            }
 
-            // 6. Повернення 400 Bad Request ДО запиту в БД
+            // 6. 400 до звернення до БД
             if (errors.Count > 0)
                 return Results.ValidationProblem(errors);
 
             var occurredAtUtc = request.OccurredAtUtc!.Value.ToUniversalTime();
 
-            // 7. Предметний конфлікт 409 (Т-03): активний дублікат (чутливо до регістру)
-            var existingIncident = await db.Incidents
+            // 7. Конфлікт (T-03): активний дублікат за title (з урахуванням регістру); Closed не блокує
+            var hasActiveDuplicate = await db.Incidents
                 .AsNoTracking()
-                .AnyAsync(item => item.Title == title && 
-                                  (item.Status == IncidentStatus.New || 
-                                   item.Status == IncidentStatus.Triaged || 
-                                   item.Status == IncidentStatus.InProgress || 
+                .AnyAsync(item => item.Title == title &&
+                                  (item.Status == IncidentStatus.New ||
+                                   item.Status == IncidentStatus.Triaged ||
+                                   item.Status == IncidentStatus.InProgress ||
                                    item.Status == IncidentStatus.Resolved), ct);
 
-            if (existingIncident)
+            if (hasActiveDuplicate)
             {
                 return Results.Problem(
                     statusCode: StatusCodes.Status409Conflict,
@@ -104,7 +135,7 @@ public static class Lab02Endpoints
                     detail: "Інцидент із такою назвою вже існує в активному статусі.");
             }
 
-            // 8. Створення сутності (Захист від Overposting: сервер сам ставить id, owner, status)
+            // 8. Entity: server-managed поля ставить сервер (захист від overposting)
             var incident = new Incident
             {
                 Id = Guid.NewGuid(),
@@ -115,7 +146,7 @@ public static class Lab02Endpoints
                 OccurredAtUtc = occurredAtUtc,
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
-                OwnerUserId = DbSeeder.AliceId // Власник фіксований для ЛР 2
+                OwnerUserId = DbSeeder.AliceId
             };
 
             db.Incidents.Add(incident);
@@ -133,6 +164,10 @@ public static class Lab02Endpoints
             return Results.Created($"/api/incidents/{incident.Id}", response);
         });
     }
+
+    // Екранування метасимволів LIKE: \ -> \\, % -> \%, _ -> \_
+    private static string EscapeLike(string value) =>
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }
 
 // === КОНТРАКТИ ===
