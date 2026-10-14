@@ -1,3 +1,4 @@
+using System.Threading.RateLimiting;
 using SecureLab.Api.Scaffolding;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
@@ -22,6 +23,30 @@ builder.Services.AddDbContext<SecureLabDbContext>(options =>
 builder.Services.AddScoped<IncidentQueries>();
 
 builder.AddLab03Identity();
+
+// ЛР 3: обмеження частоти входів (політика "login"). Реєструється ДО builder.Build().
+// Значення читаються під час запиту, тому тести можуть змінювати їх через конфігурацію.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("login", httpContext =>
+    {
+        var permit = builder.Configuration.GetValue("RateLimit:Login:PermitLimit", 20);
+        var window = builder.Configuration.GetValue("RateLimit:Login:WindowSeconds", 60);
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(window),
+                QueueLimit = 0
+            });
+    });
+});
+
+// Некоректний JSON дає 400, а не 500 (для перевірок register).
+builder.Services.Configure<Microsoft.AspNetCore.Routing.RouteHandlerOptions>(
+    options => options.ThrowOnBadRequest = false);
 
 var app = builder.Build();
 
@@ -51,7 +76,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseAuthentication();
 app.UseAuthorization();
-
+app.UseRateLimiter();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 

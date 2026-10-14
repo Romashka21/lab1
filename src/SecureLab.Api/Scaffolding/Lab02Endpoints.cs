@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using SecureLab.Api.Data;
@@ -64,8 +65,13 @@ public static class Lab02Endpoints
         });
 
         // 2. ЗАХИЩЕНИЙ POST (ЕТАП 2)
-        app.MapPost("/api/incidents", async (CreateIncidentRequest request, SecureLabDbContext db, CancellationToken ct) =>
+        app.MapPost("/api/incidents", async (CreateIncidentRequest request, HttpContext httpContext, SecureLabDbContext db, CancellationToken ct) =>
         {
+            // ЛР 3: власник береться ЛИШЕ з перевіреного principal (cookie), а не з тіла запиту чи header.
+            var verifiedUserIdText = httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (!Guid.TryParse(verifiedUserIdText, out var ownerUserId))
+                return Results.Problem(statusCode: StatusCodes.Status500InternalServerError);
+
             var now = DateTimeOffset.UtcNow;
             var errors = new Dictionary<string, string[]>();
 
@@ -146,7 +152,7 @@ public static class Lab02Endpoints
                 OccurredAtUtc = occurredAtUtc,
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
-                OwnerUserId = DbSeeder.AliceId
+                OwnerUserId = ownerUserId
             };
 
             db.Incidents.Add(incident);
@@ -162,7 +168,7 @@ public static class Lab02Endpoints
                 incident.CreatedAtUtc);
 
             return Results.Created($"/api/incidents/{incident.Id}", response);
-        });
+        }).RequireAuthorization();
     }
 
     // Екранування метасимволів LIKE: \ -> \\, % -> \%, _ -> \_

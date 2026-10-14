@@ -11,9 +11,17 @@ using SecureLab.Api.Scaffolding;
 namespace SecureLab.Api.Tests;
 
 public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
-    : IClassFixture<SecureLabApiFactory>
+    : IClassFixture<SecureLabApiFactory>, IDisposable
 {
-    private readonly HttpClient _client = factory.CreateClient();
+    private readonly HttpClient _client = factory.CreateClient();   // анонімний: лише для GET /search
+
+    // ЛР 3: POST /api/incidents захищено, тому всі створення виконує клієнт, що ввійшов як Bob.
+    private HttpClient? _auth;
+    private static string SeedPassword =>
+        Environment.GetEnvironmentVariable("SeedUsers__Password")
+        ?? throw new InvalidOperationException("Set local SeedUsers__Password outside Git.");
+    private async Task<HttpClient> AuthAsync() => _auth ??= await factory.LoginAsync("bob", SeedPassword);
+    public void Dispose() => _auth?.Dispose();
 
     private static readonly Guid UsbIncidentId = Guid.Parse("20000000-0000-0000-0000-000000000005");
 
@@ -64,7 +72,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
         var title = $"T01-{Guid.NewGuid():N}";
         try
         {
-            using var response = await _client.PostAsJsonAsync("/api/incidents", ValidBody(title));
+            using var response = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", ValidBody(title));
 
             Assert.Equal(HttpStatusCode.Created, response.StatusCode);
             Assert.NotNull(response.Headers.Location);
@@ -93,7 +101,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
         var title = $"T02-{Guid.NewGuid():N}";
         try
         {
-            using var response = await _client.PostAsJsonAsync("/api/incidents", ValidBody(title, severity));
+            using var response = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", ValidBody(title, severity));
             await AssertProblemAsync(response, HttpStatusCode.BadRequest, "severity");
         }
         finally
@@ -105,7 +113,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
     [Fact]
     public async Task T02_EmptyTitle_Returns400WithTitleKey()
     {
-        using var response = await _client.PostAsJsonAsync("/api/incidents", ValidBody("   "));
+        using var response = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", ValidBody("   "));
         await AssertProblemAsync(response, HttpStatusCode.BadRequest, "title");
     }
 
@@ -122,7 +130,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
                 severity = "Low",
                 occurredAtUtc = "2099-01-01T00:00:00Z"
             };
-            using var response = await _client.PostAsJsonAsync("/api/incidents", body);
+            using var response = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", body);
             await AssertProblemAsync(response, HttpStatusCode.BadRequest, "occurredAtUtc");
         }
         finally
@@ -139,11 +147,11 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
         var title = $"Regression-{Guid.NewGuid():N}";
         try
         {
-            using var first = await _client.PostAsJsonAsync("/api/incidents", ValidBody(title));
+            using var first = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", ValidBody(title));
             Assert.Equal(HttpStatusCode.Created, first.StatusCode);
 
             // той самий title з пробілами по краях: після Trim це дублікат
-            using var second = await _client.PostAsJsonAsync("/api/incidents", ValidBody($"  {title}  "));
+            using var second = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", ValidBody($"  {title}  "));
             await AssertProblemAsync(second, HttpStatusCode.Conflict);
         }
         finally
@@ -159,10 +167,10 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
         var lowerTitle = title.ToLowerInvariant();
         try
         {
-            using var first = await _client.PostAsJsonAsync("/api/incidents", ValidBody(title));
+            using var first = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", ValidBody(title));
             Assert.Equal(HttpStatusCode.Created, first.StatusCode);
 
-            using var second = await _client.PostAsJsonAsync("/api/incidents", ValidBody(lowerTitle));
+            using var second = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", ValidBody(lowerTitle));
             Assert.Equal(HttpStatusCode.Created, second.StatusCode);
         }
         finally
@@ -181,11 +189,11 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
         var okTitle = $"T09-{Guid.NewGuid():N}";
         try
         {
-            using var bad = await _client.PostAsJsonAsync("/api/incidents",
+            using var bad = await (await AuthAsync()).PostAsJsonAsync("/api/incidents",
                 ValidBody(shortTitle, "High", new string('x', 39)));
             await AssertProblemAsync(bad, HttpStatusCode.BadRequest, "description");
 
-            using var good = await _client.PostAsJsonAsync("/api/incidents",
+            using var good = await (await AuthAsync()).PostAsJsonAsync("/api/incidents",
                 ValidBody(okTitle, "High", new string('x', 40)));
             Assert.Equal(HttpStatusCode.Created, good.StatusCode);
         }
@@ -205,11 +213,11 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
         var okTitle = $"T10-{Guid.NewGuid():N}";
         try
         {
-            using var bad = await _client.PostAsJsonAsync("/api/incidents",
+            using var bad = await (await AuthAsync()).PostAsJsonAsync("/api/incidents",
                 ValidBody(sameTitle, "Low", sameTitle));
             await AssertProblemAsync(bad, HttpStatusCode.BadRequest, "description");
 
-            using var good = await _client.PostAsJsonAsync("/api/incidents", ValidBody(okTitle));
+            using var good = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", ValidBody(okTitle));
             Assert.Equal(HttpStatusCode.Created, good.StatusCode);
         }
         finally
@@ -308,7 +316,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
                 createdAtUtc = "2000-01-01T00:00:00Z"
             };
 
-            using var response = await _client.PostAsJsonAsync("/api/incidents", body);
+            using var response = await (await AuthAsync()).PostAsJsonAsync("/api/incidents", body);
             Assert.Equal(HttpStatusCode.Created, response.StatusCode);
 
             var created = await response.Content.ReadFromJsonAsync<CreatedIncidentResponse>();
@@ -319,7 +327,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
             await using var scope = factory.Services.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<SecureLabDbContext>();
             var saved = await db.Incidents.AsNoTracking().SingleAsync(item => item.Title == title);
-            Assert.Equal(DbSeeder.AliceId, saved.OwnerUserId);
+            Assert.Equal(DbSeeder.BobId, saved.OwnerUserId);   // ЛР 3: власник = той, хто ввійшов (Bob)
             Assert.Equal(IncidentStatus.New, saved.Status);
             Assert.True(saved.CreatedAtUtc > DateTimeOffset.UtcNow.AddMinutes(-5));
         }

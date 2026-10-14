@@ -1,7 +1,59 @@
 <!doctype html>
-<html lang="uk"><meta charset="utf-8"><title>ЛР 03 — сеанс</title>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ЛР 03 — сеанс</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 1.5rem auto; padding: 0 1rem; }
+  fieldset { margin: 1rem 0; }
+  label { display: block; margin: .3rem 0; }
+  input, select, textarea { width: 100%; box-sizing: border-box; }
+  button { margin: .4rem .4rem .4rem 0; }
+  pre { background: #f4f4f4; padding: .6rem; white-space: pre-wrap; }
+</style>
+</head>
+<body>
 <h1>Навчальний сеанс</h1>
-<form id="login"><label>Ім’я <input name="userName" autocomplete="username" required></label>
-<label>Пароль <input name="password" type="password" autocomplete="current-password" required></label><button>Увійти</button></form>
-<button id="me">Мій профіль</button><button id="logout">Вийти</button><pre id="result"></pre>
-<script src="auth-lab.js" defer></script></html>
+<p>Стан: <strong id="state">перевірка…</strong></p>
+
+<fieldset><legend>1. Реєстрація</legend>
+<form id="register">
+  <label>Ім’я користувача <input name="userName" autocomplete="username" required></label>
+  <label>Email <input name="email" type="email" autocomplete="email" required></label>
+  <label>Відображуване ім’я <input name="displayName" required></label>
+  <label>Пароль <input name="password" type="password" autocomplete="new-password" required></label>
+  <button>Зареєструватися</button>
+</form></fieldset>
+
+<fieldset><legend>2. Вхід</legend>
+<form id="login">
+  <label>Ім’я <input name="userName" autocomplete="username" required></label>
+  <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
+  <button>Увійти</button>
+</form></fieldset>
+
+<fieldset><legend>3. Профіль</legend>
+<button id="me">Мій профіль</button>
+<pre id="profile">—</pre></fieldset>
+
+<fieldset><legend>4. Новий інцидент</legend>
+<form id="incident">
+  <label>Назва <input name="title" required maxlength="160"></label>
+  <label>Опис <textarea name="description" required rows="3"></textarea></label>
+  <label>Рівень
+    <select name="severity">
+      <option>Low</option><option>Medium</option><option>High</option><option>Critical</option>
+    </select></label>
+  <label>Час виникнення <input name="occurredAt" type="datetime-local" required></label>
+  <button>Створити</button>
+</form>
+<pre id="incident-result">—</pre></fieldset>
+
+<fieldset><legend>5. Вихід</legend>
+<button id="logout">Вийти</button></fieldset>
+
+<pre id="result"></pre>
+<script src="auth-lab.js" defer></script>
+</body>
+</html>
