@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using SecureLab.Api.Application.Incidents;
 using SecureLab.Api.Data;
 using SecureLab.Api.Data.Entities;
 using SecureLab.Api.Presentation.Contracts;
@@ -12,8 +13,15 @@ public static class Lab02Endpoints
     public static void MapLab02Endpoints(this WebApplication app)
     {
         // 1. БЕЗПЕЧНИЙ ПОШУК (ЕТАП 4): значення q іде параметром, структуру запиту обирає allowlist
-        app.MapGet("/api/incidents/search", async (string? q, string? sortBy, SecureLabDbContext db, CancellationToken ct) =>
+        // ЛР 4 (A-11): пошук вимагає login і повертає лише дозволену множину (owner або Analyst).
+        app.MapGet("/api/incidents/search", async (string? q, string? sortBy, HttpContext httpContext, SecureLabDbContext db, CancellationToken ct) =>
         {
+            var viewer = IncidentViewer.FromPrincipal(httpContext.User);
+            if (viewer is null)
+            {
+                return Results.Challenge();
+            }
+
             // allowlist: порожнє або відсутнє значення означає createdAtUtc, усе інше поза переліком -> 400
             var sortKey = string.IsNullOrEmpty(sortBy) ? "createdAtUtc" : sortBy;
             if (sortKey is not ("createdAtUtc" or "severity" or "status"))
@@ -29,6 +37,7 @@ public static class Lab02Endpoints
 
             var found = db.Incidents
                 .AsNoTracking()
+                .VisibleTo(viewer)   // ЛР 4: обмеження за суб'єктом ДО сортування й Take(50)
                 .Where(incident => EF.Functions.ILike(incident.Title, pattern, "\\")
                                    || EF.Functions.ILike(incident.Description, pattern, "\\"));
 
@@ -62,7 +71,7 @@ public static class Lab02Endpoints
                 .ToListAsync(ct);
 
             return Results.Ok(items);
-        });
+        }).RequireAuthorization();
 
         // 2. ЗАХИЩЕНИЙ POST (ЕТАП 2)
         app.MapPost("/api/incidents", async (CreateIncidentRequest request, HttpContext httpContext, SecureLabDbContext db, CancellationToken ct) =>

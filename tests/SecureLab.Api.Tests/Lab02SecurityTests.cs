@@ -13,7 +13,10 @@ namespace SecureLab.Api.Tests;
 public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
     : IClassFixture<SecureLabApiFactory>, IDisposable
 {
-    private readonly HttpClient _client = factory.CreateClient();   // анонімний: лише для GET /search
+    // ЛР 4: пошук захищено й обмежено видимістю (A-11). Механіку пошуку ЛР 2 перевіряємо від імені
+    // Analyst (Morgan): за матрицею його дозволена множина — усі інциденти, тож очікування ЛР 2 не змінюються.
+    private HttpClient? _analyst;
+    private async Task<HttpClient> AnalystAsync() => _analyst ??= await factory.LoginAsync("morgan", SeedPassword);
 
     // ЛР 3: POST /api/incidents захищено, тому всі створення виконує клієнт, що ввійшов як Bob.
     private HttpClient? _auth;
@@ -21,7 +24,11 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
         Environment.GetEnvironmentVariable("SeedUsers__Password")
         ?? throw new InvalidOperationException("Set local SeedUsers__Password outside Git.");
     private async Task<HttpClient> AuthAsync() => _auth ??= await factory.LoginAsync("bob", SeedPassword);
-    public void Dispose() => _auth?.Dispose();
+    public void Dispose()
+    {
+        _auth?.Dispose();
+        _analyst?.Dispose();
+    }
 
     private static readonly Guid UsbIncidentId = Guid.Parse("20000000-0000-0000-0000-000000000005");
 
@@ -234,7 +241,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
     {
         const string control = "zz-no-match' OR TRUE -- ";
 
-        using var response = await _client.GetAsync("/api/incidents/search?q=" + Uri.EscapeDataString(control));
+        using var response = await (await AnalystAsync()).GetAsync("/api/incidents/search?q=" + Uri.EscapeDataString(control));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var items = await response.Content.ReadFromJsonAsync<List<IncidentListItemResponse>>();
@@ -242,7 +249,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
         Assert.Empty(items);
 
         // позитивний контроль: пошук не став "надто суворим"
-        var usb = await _client.GetFromJsonAsync<List<IncidentListItemResponse>>("/api/incidents/search?q=USB");
+        var usb = await (await AnalystAsync()).GetFromJsonAsync<List<IncidentListItemResponse>>("/api/incidents/search?q=USB");
         Assert.NotNull(usb);
         var single = Assert.Single(usb);
         Assert.Equal(UsbIncidentId, single.Id);
@@ -253,7 +260,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
     {
         foreach (var value in new[] { "%", "_", "\\" })
         {
-            var items = await _client.GetFromJsonAsync<List<IncidentListItemResponse>>(
+            var items = await (await AnalystAsync()).GetFromJsonAsync<List<IncidentListItemResponse>>(
                 "/api/incidents/search?q=" + Uri.EscapeDataString(value));
             Assert.NotNull(items);
             Assert.Empty(items);
@@ -265,7 +272,7 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
     [Fact]
     public async Task T04_ApostropheSearch_Returns200AndOBrienIncident()
     {
-        using var response = await _client.GetAsync("/api/incidents/search?q=" + Uri.EscapeDataString("O'Brien"));
+        using var response = await (await AnalystAsync()).GetAsync("/api/incidents/search?q=" + Uri.EscapeDataString("O'Brien"));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var items = await response.Content.ReadFromJsonAsync<List<IncidentListItemResponse>>();
@@ -278,14 +285,14 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
     [Fact]
     public async Task T05_UnknownSortBy_Returns400WithSortByKey()
     {
-        using var response = await _client.GetAsync("/api/incidents/search?sortBy=price");
+        using var response = await (await AnalystAsync()).GetAsync("/api/incidents/search?sortBy=price");
         await AssertProblemAsync(response, HttpStatusCode.BadRequest, "sortBy");
     }
 
     [Fact]
     public async Task SortBy_Severity_OrdersByRankNotAlphabet()
     {
-        var items = await _client.GetFromJsonAsync<List<IncidentListItemResponse>>("/api/incidents/search?sortBy=severity");
+        var items = await (await AnalystAsync()).GetFromJsonAsync<List<IncidentListItemResponse>>("/api/incidents/search?sortBy=severity");
         Assert.NotNull(items);
         var ranks = items.Select(item => item.Severity switch
         {
