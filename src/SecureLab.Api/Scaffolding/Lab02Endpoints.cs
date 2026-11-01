@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -40,6 +41,7 @@ public static class Lab02Endpoints
                 .VisibleTo(viewer)   // ЛР 4: обмеження за суб'єктом ДО сортування й Take(50)
                 .Where(incident => EF.Functions.ILike(incident.Title, pattern, "\\")
                                    || EF.Functions.ILike(incident.Description, pattern, "\\"));
+            var total = await found.CountAsync(ct);
 
             IQueryable<Incident> ordered = sortKey switch
             {
@@ -69,6 +71,8 @@ public static class Lab02Endpoints
                     incident.OccurredAtUtc,
                     incident.CreatedAtUtc))
                 .ToListAsync(ct);
+                httpContext.Response.Headers["X-Total-Count"] = total.ToString(CultureInfo.InvariantCulture);
+
 
             return Results.Ok(items);
         }).RequireAuthorization();
