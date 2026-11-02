@@ -97,6 +97,12 @@ public static class DbSeeder
         };
 
         dbContext.Incidents.AddRange(aliceIncident, bobIncident, safeTextIncident);
+        // ЛР 5 (добрий рівень): канонічний harmless marker для другого sink — IncidentComment.Text.
+        const string Lab05Marker =
+            "<img src=x onerror=\""
+            + "document.querySelector('#lab05-marker-target')"
+            + ".setAttribute('data-lab05-marker','executed')\">";
+
         dbContext.IncidentComments.AddRange(
             new IncidentComment
             {
@@ -126,6 +132,16 @@ public static class DbSeeder
                 Text = "Внутрішня примітка аналітика: звірити заголовки SPF/DKIM перед відповіддю заявнику.",
                 IsInternal = true,
                 CreatedAtUtc = new DateTimeOffset(2026, 8, 1, 9, 45, 0, TimeSpan.Zero)
+            },
+            // ЛР 5: публічний коментар Morgan із marker (comment-5).
+            new IncidentComment
+            {
+                Id = Guid.Parse("30000000-0000-0000-0000-000000000005"),
+                Incident = aliceIncident,
+                Author = morgan,
+                Text = Lab05Marker,
+                IsInternal = false,
+                CreatedAtUtc = new DateTimeOffset(2026, 8, 1, 9, 35, 0, TimeSpan.Zero)
             });
         dbContext.IncidentStatusHistory.Add(
             new IncidentStatusHistory
