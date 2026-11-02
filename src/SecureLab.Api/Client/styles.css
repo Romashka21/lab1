@@ -138,3 +138,15 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+/* ЛР 5: колишні inline style-атрибути index.html (CSP style-src 'self' без unsafe-inline). */
+.summary-section {
+  margin-top: 2rem;
+  padding: 1rem;
+  border-top: 1px solid #ccc;
+}
+
+.summary-status {
+  margin-left: 10px;
+  color: #555;
+}

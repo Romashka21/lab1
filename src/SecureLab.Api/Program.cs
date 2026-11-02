@@ -47,6 +47,22 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
+// ЛР 5: навчальна CORS policy лише для Development — один exact origin probe 4173.
+// 4174 навмисно не дозволено (негативний контроль). У Production policy не реєструється.
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddCors(options =>
+    {
+        options.AddPolicy("Lab05BrowserProbe", policy =>
+        {
+            policy.WithOrigins("http://localhost:4173")
+                  .WithMethods("GET")
+                  .WithHeaders("X-Lab-Cors-Probe")
+                  .AllowCredentials();   // добрий/відмінний рівень: cookie-дослід (Етап 3, крок 5)
+        });
+    });
+}
+
 // Некоректний JSON дає 400, а не 500 (для перевірок register).
 builder.Services.Configure<Microsoft.AspNetCore.Routing.RouteHandlerOptions>(
     options => options.ThrowOnBadRequest = false);
@@ -64,10 +80,27 @@ if (resetRequested)
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
+// ЛР 5: CSP з фактичних ресурсів клієнта (усе з власного origin, без inline-коду й стилів).
+// Спершу Content-Security-Policy-Report-Only, після перевірки — Content-Security-Policy.
+const string CspHeaderName = "Content-Security-Policy";
+const string Csp =
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
+    + "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
 app.Use(async (context, next) =>
 {
     context.Response.Headers.XContentTypeOptions = "nosniff";
     context.Response.Headers.Append("Referrer-Policy", "no-referrer");
+
+    // Виняток лише для Development-довідника Scalar (сторонній UI з власними inline-ресурсами).
+    var isDevelopmentApiReference =
+        app.Environment.IsDevelopment()
+        && context.Request.Path.StartsWithSegments("/scalar");
+    if (!isDevelopmentApiReference)
+    {
+        context.Response.Headers[CspHeaderName] = Csp;
+    }
+
     await next(context);
 });
 
@@ -77,6 +110,12 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference();
 }
 
+// ЛР 5: явний UseRouting і CORS до authentication/authorization — дозволені CORS headers є й на 401/403.
+app.UseRouting();
+if (app.Environment.IsDevelopment())
+{
+    app.UseCors("Lab05BrowserProbe");
+}
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
