@@ -35,3 +35,30 @@ document.querySelector("#edit").addEventListener("submit", async event => {
     await load();
   }
 });
+
+const LINK_BASE = "http://localhost:5080/";
+const LINK_ORIGIN = new URL(LINK_BASE).origin;
+
+function safeSameOriginUrl(value) {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  let url;
+  try {
+    url = new URL(value, LINK_BASE);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.origin !== LINK_ORIGIN) return null;
+  return url.href;
+}
+
+function renderSafeLink(anchor, value, label) {
+  const href = safeSameOriginUrl(value);
+  if (href == null) {
+    anchor.removeAttribute("href");
+  } else {
+    anchor.href = href;
+  }
+  anchor.textContent = label;
+  return href;
+}
