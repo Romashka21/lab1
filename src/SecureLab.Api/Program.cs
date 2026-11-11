@@ -77,11 +77,10 @@ if (resetRequested)
     return;
 }
 
-app.UseExceptionHandler();
-app.UseStatusCodePages();
-
-// ЛР 5: CSP з фактичних ресурсів клієнта (усе з власного origin, без inline-коду й стилів).
-// Спершу Content-Security-Policy-Report-Only, після перевірки — Content-Security-Policy.
+// ЛР 6 (F-02): заголовки безпеки ставимо через Response.OnStarting у middleware, що стоїть
+// ПЕРЕД UseExceptionHandler. Раніше блок стояв після нього, і на unexpected 500 exception handler
+// очищав відповідь (Response.Clear) разом із уже встановленими заголовками. OnStarting виконується
+// безпосередньо перед надсиланням headers, тож охоплює й error path.
 const string CspHeaderName = "Content-Security-Policy";
 const string Csp =
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
@@ -89,20 +88,29 @@ const string Csp =
 
 app.Use(async (context, next) =>
 {
-    context.Response.Headers.XContentTypeOptions = "nosniff";
-    context.Response.Headers.Append("Referrer-Policy", "no-referrer");
-
     // Виняток лише для Development-довідника Scalar (сторонній UI з власними inline-ресурсами).
     var isDevelopmentApiReference =
         app.Environment.IsDevelopment()
         && context.Request.Path.StartsWithSegments("/scalar");
-    if (!isDevelopmentApiReference)
+
+    context.Response.OnStarting(() =>
     {
-        context.Response.Headers[CspHeaderName] = Csp;
-    }
+        var headers = context.Response.Headers;
+        headers.XContentTypeOptions = "nosniff";
+        headers["Referrer-Policy"] = "no-referrer";
+        if (!isDevelopmentApiReference)
+        {
+            headers[CspHeaderName] = Csp;
+        }
+
+        return Task.CompletedTask;
+    });
 
     await next(context);
 });
+
+app.UseExceptionHandler();
+app.UseStatusCodePages();
 
 if (app.Environment.IsDevelopment())
 {
@@ -139,4 +147,4 @@ app.MapFallbackToFile("index.html");
 
 app.Run();
 
-public partial class Program;
+public partial class Program;
