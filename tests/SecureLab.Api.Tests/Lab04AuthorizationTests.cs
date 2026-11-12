@@ -26,10 +26,12 @@ public sealed class Lab04Sessions : IAsyncLifetime
     {
         var password = Environment.GetEnvironmentVariable("SeedUsers__Password")
             ?? throw new InvalidOperationException("Set local SeedUsers__Password outside Git.");
-        Alice = await Factory.LoginAsync("alice", password);
-        Bob = await Factory.LoginAsync("bob", password);
-        Morgan = await Factory.LoginAsync("morgan", password);
-        Admin = await Factory.LoginAsync("admin", password);
+        // ЛР 6: кожен клієнт одержує ВЛАСНИЙ request token (токен Alice не перевіряє права Bob),
+        // тож мутації A-04/A-06/A-07 доходять до перевірки авторизації, а не зупиняються на antiforgery.
+        Alice = await Factory.LoginWithCsrfAsync("alice", password);
+        Bob = await Factory.LoginWithCsrfAsync("bob", password);
+        Morgan = await Factory.LoginWithCsrfAsync("morgan", password);
+        Admin = await Factory.LoginWithCsrfAsync("admin", password);
     }
 
     public async Task DisposeAsync()

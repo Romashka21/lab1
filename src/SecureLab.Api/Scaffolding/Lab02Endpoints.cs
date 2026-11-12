@@ -5,6 +5,7 @@ using SecureLab.Api.Application.Incidents;
 using SecureLab.Api.Data;
 using SecureLab.Api.Data.Entities;
 using SecureLab.Api.Presentation.Contracts;
+using SecureLab.Api.Presentation.Security;
 
 namespace SecureLab.Api.Scaffolding;
 
@@ -177,7 +178,7 @@ public static class Lab02Endpoints
                 incident.CreatedAtUtc);
 
             return Results.Created($"/api/incidents/{incident.Id}", response);
-        }).RequireAuthorization();
+        }).RequireAuthorization().RequireAntiforgeryToken();   // ЛР 6: explicit antiforgery
     }
 
     // Екранування метасимволів LIKE: \ -> \\, % -> \%, _ -> \_

@@ -6,6 +6,7 @@ using SecureLab.Api.Application.Incidents;
 using SecureLab.Api.Data;
 using SecureLab.Api.Data.Entities;
 using SecureLab.Api.Presentation.Contracts;
+using SecureLab.Api.Presentation.Security;
 
 namespace SecureLab.Api.Presentation.Endpoints;
 
@@ -34,7 +35,10 @@ public static class IncidentEndpoints
             .WithName("GetSeveritySummary")
             .Produces<IReadOnlyList<IncidentSeveritySummaryResponse>>();
 
+        // ЛР 6: кожен cookie-authenticated mutation маршрут — explicit antiforgery validation.
+        // Filter додано до окремих маршрутів, а не до групи: GET-маршрути токена не потребують.
         group.MapPut("/{id:guid}", UpdateAsync)
+            .RequireAntiforgeryToken()
             .WithName("UpdateIncident")
             .Produces<IncidentListItemResponse>()
             .ProducesValidationProblem()
@@ -43,12 +47,14 @@ public static class IncidentEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict);
 
         group.MapDelete("/{id:guid}", DeleteAsync)
+            .RequireAntiforgeryToken()
             .WithName("DeleteIncident")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
         group.MapPost("/{id:guid}/triage", TriageAsync)
+            .RequireAntiforgeryToken()
             .WithName("TriageIncident")
             .Produces<TriageIncidentResponse>()
             .ProducesProblem(StatusCodes.Status403Forbidden)

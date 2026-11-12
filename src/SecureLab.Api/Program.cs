@@ -6,6 +6,7 @@ using Scalar.AspNetCore;
 using SecureLab.Api.Application.Incidents;
 using SecureLab.Api.Data;
 using SecureLab.Api.Presentation.Endpoints;
+using SecureLab.Api.Presentation.Security;
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
@@ -26,6 +27,9 @@ builder.Services.AddScoped<IncidentQueries>();
 builder.Services.AddSingleton<IAuthorizationHandler, IncidentAuthorizationHandler>();
 
 builder.AddLab03Identity();
+
+// ЛР 6: antiforgery для cookie-authenticated mutation endpoints (header X-SecureLab-CSRF).
+builder.AddSecureLabAntiforgery();
 
 // ЛР 3: обмеження частоти входів (політика "login"). Реєструється ДО builder.Build().
 // Значення читаються під час запиту, тому тести можуть змінювати їх через конфігурацію.
@@ -141,6 +145,7 @@ app.MapGet("/health", async (SecureLabDbContext dbContext, CancellationToken can
     .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
 app.MapIncidentEndpoints();
+app.MapCsrfToken();
 app.MapLab03Identity();
 app.MapLab02Endpoints();
 app.MapFallbackToFile("index.html");
