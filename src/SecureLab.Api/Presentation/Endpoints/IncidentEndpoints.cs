@@ -220,6 +220,7 @@ public static class IncidentEndpoints
         var hasActiveDuplicate = await db.Incidents
             .AsNoTracking()
             .AnyAsync(item => item.Id != incident.Id
+                              && item.OwnerUserId == incident.OwnerUserId   // ЛР 6 (F-03): лише власні
                               && item.Title == title
                               && (item.Status == IncidentStatus.New
                                   || item.Status == IncidentStatus.Triaged
@@ -339,6 +340,9 @@ public static class IncidentEndpoints
         });
         await db.SaveChangesAsync(cancellationToken);
 
+        // ЛР 6: audit trail дозволеного privileged transition у тому самому каналі SecureLab.Audit,
+        // що й відмова: subject, action, resource, result, time, traceId. Note і body не логуються.
+        WriteAllowedAudit(loggerFactory.CreateLogger("SecureLab.Audit"), httpContext, "incident.triage", incident.Id);
         return Results.Ok(new TriageIncidentResponse(incident.Id, incident.Status.ToString()));
     }
 
@@ -391,6 +395,20 @@ public static class IncidentEndpoints
             action,
             resourceId,
             "denied",
+            DateTimeOffset.UtcNow,
+            Activity.Current?.Id ?? httpContext.TraceIdentifier);
+    }
+
+    // ЛР 6: подія для ДОЗВОЛЕНОГО privileged transition — той самий формат і канал, що й відмова.
+    private static void WriteAllowedAudit(ILogger logger, HttpContext httpContext, string action, Guid resourceId)
+    {
+        logger.LogInformation(
+            "authorization.allowed subject={SubjectId} action={Action} resource={ResourceId} "
+            + "result={Result} occurredAtUtc={OccurredAtUtc:O} traceId={TraceId}",
+            httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier),
+            action,
+            resourceId,
+            "succeeded",
             DateTimeOffset.UtcNow,
             Activity.Current?.Id ?? httpContext.TraceIdentifier);
     }

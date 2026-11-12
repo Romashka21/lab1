@@ -134,10 +134,13 @@ public static class Lab02Endpoints
 
             var occurredAtUtc = request.OccurredAtUtc!.Value.ToUniversalTime();
 
-            // 7. Конфлікт (T-03): активний дублікат за title (з урахуванням регістру); Closed не блокує
+            // 7. Конфлікт (T-03): активний дублікат за title (з урахуванням регістру); Closed не блокує.
+            // ЛР 6 (F-03): лише серед інцидентів ТОГО САМОГО власника. Глобальна перевірка відповідала 409
+            // на назву чужого інциденту й розкривала його існування всупереч політиці 404 (A-10).
             var hasActiveDuplicate = await db.Incidents
                 .AsNoTracking()
-                .AnyAsync(item => item.Title == title &&
+                .AnyAsync(item => item.OwnerUserId == ownerUserId &&
+                                  item.Title == title &&
                                   (item.Status == IncidentStatus.New ||
                                    item.Status == IncidentStatus.Triaged ||
                                    item.Status == IncidentStatus.InProgress ||
