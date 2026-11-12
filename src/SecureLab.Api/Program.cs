@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using SecureLab.Api.Application.Incidents;
 using SecureLab.Api.Data;
+using SecureLab.Api.Infrastructure.RateLimiting;
 using SecureLab.Api.Presentation.Endpoints;
 using SecureLab.Api.Presentation.Security;
 
@@ -32,6 +33,11 @@ builder.AddLab03Identity();
 
 // ЛР 6: antiforgery для cookie-authenticated mutation endpoints (header X-SecureLab-CSRF).
 builder.AddSecureLabAntiforgery();
+
+// ЛР 6 (advanced, Redis): спільний лічильник policy "search" між екземплярами API.
+// Вмикається в будь-якому профілі ключем RateLimit:Search:Redis:ConnectionString; без нього —
+// локальний in-memory limiter і явний warning на старті (див. нижче після Build()).
+builder.Services.AddSingleton<RedisSearchQuotaStore>();
 
 // ЛР 3: обмеження частоти входів (політика "login"). Реєструється ДО builder.Build().
 // Значення читаються під час запиту, тому тести можуть змінювати їх через конфігурацію.
@@ -78,8 +84,20 @@ builder.Services.AddRateLimiter(options =>
         var permit = builder.Configuration.GetValue("RateLimit:Search:PermitLimit", 20);
         var window = builder.Configuration.GetValue("RateLimit:Search:WindowSeconds", 60);
         var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var partitionKey = userId is null ? "anonymous" : "user:" + userId;
+
+        // ЛР 6 (advanced): той самий quota/window і той самий OnRejected (429 + Retry-After),
+        // але лічильник — у Redis; при недоступності Redis limiter сам переходить на локальний.
+        var redisStore = httpContext.RequestServices.GetRequiredService<RedisSearchQuotaStore>();
+        if (redisStore.Enabled)
+        {
+            return RateLimitPartition.Get(
+                partitionKey,
+                key => new RedisFixedWindowSearchLimiter(redisStore, key, permit, TimeSpan.FromSeconds(window)));
+        }
+
         return RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: userId is null ? "anonymous" : "user:" + userId,
+            partitionKey: partitionKey,
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permit,
@@ -110,6 +128,22 @@ builder.Services.Configure<Microsoft.AspNetCore.Routing.RouteHandlerOptions>(
     options => options.ThrowOnBadRequest = false);
 
 var app = builder.Build();
+
+// ЛР 6 (advanced): режим search limiter видно в журналі старту (без connection string).
+var searchQuotaStore = app.Services.GetRequiredService<RedisSearchQuotaStore>();
+if (searchQuotaStore.Enabled)
+{
+    app.Logger.LogInformation(
+        "Search rate limiter: Redis (спільний лічильник), key prefix {KeyPrefix}, пауза перепідключення {PauseSeconds} с.",
+        searchQuotaStore.KeyPrefix,
+        searchQuotaStore.ReconnectPauseSeconds);
+}
+else
+{
+    app.Logger.LogWarning(
+        "Search rate limiter: Redis не налаштовано (RateLimit:Search:Redis:ConnectionString); "
+        + "діє локальний in-memory limiter — кожен екземпляр API рахує запити окремо.");
+}
 
 var resetRequested = args.Contains("--reset-database", StringComparer.Ordinal);
 await DatabaseBootstrap.InitializeAsync(app.Services, app.Configuration, app.Environment, resetRequested);
