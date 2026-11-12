@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authorization;
 using SecureLab.Api.Scaffolding;
@@ -36,12 +38,48 @@ builder.AddSecureLabAntiforgery();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // ЛР 6: узгоджений 429 для всіх policy — Problem Details + Retry-After; без імені облікового запису
+    // й без деталей partition (відповідь однакова для існуючого й неіснуючого користувача).
+    options.OnRejected = async (context, _) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter =
+                ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+        }
+
+        await Results.Problem(
+                title: "Забагато запитів",
+                detail: "Перевищено ліміт запитів. Повторіть пізніше.",
+                statusCode: StatusCodes.Status429TooManyRequests)
+            .ExecuteAsync(context.HttpContext);
+    };
+
     options.AddPolicy("login", httpContext =>
     {
         var permit = builder.Configuration.GetValue("RateLimit:Login:PermitLimit", 20);
         var window = builder.Configuration.GetValue("RateLimit:Login:WindowSeconds", 60);
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(window),
+                QueueLimit = 0
+            });
+    });
+
+    // ЛР 6 (добрий/відмінний): пошук. Partition — перевірений id користувача з auth-cookie
+    // (UseRateLimiter стоїть після UseAuthentication/UseAuthorization), а не IP (спільний для
+    // кількох людей) і не довільний header клієнта. Анонім сюди не доходить: маршрут вимагає login.
+    options.AddPolicy("search", httpContext =>
+    {
+        var permit = builder.Configuration.GetValue("RateLimit:Search:PermitLimit", 20);
+        var window = builder.Configuration.GetValue("RateLimit:Search:WindowSeconds", 60);
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: userId is null ? "anonymous" : "user:" + userId,
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permit,

@@ -72,7 +72,7 @@ public static class Lab02Endpoints
                 .ToListAsync(ct);
 
             return Results.Ok(items);
-        }).RequireAuthorization();
+        }).RequireAuthorization().RequireRateLimiting("search");   // ЛР 6: per-user quota
 
         // 2. ЗАХИЩЕНИЙ POST (ЕТАП 2)
         app.MapPost("/api/incidents", async (CreateIncidentRequest request, HttpContext httpContext, SecureLabDbContext db, CancellationToken ct) =>
