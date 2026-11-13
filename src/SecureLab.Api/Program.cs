@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authorization;
 using SecureLab.Api.Scaffolding;
@@ -5,7 +7,9 @@ using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using SecureLab.Api.Application.Incidents;
 using SecureLab.Api.Data;
+using SecureLab.Api.Infrastructure.RateLimiting;
 using SecureLab.Api.Presentation.Endpoints;
+using SecureLab.Api.Presentation.Security;
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
@@ -27,17 +31,73 @@ builder.Services.AddSingleton<IAuthorizationHandler, IncidentAuthorizationHandle
 
 builder.AddLab03Identity();
 
+// ЛР 6: antiforgery для cookie-authenticated mutation endpoints (header X-SecureLab-CSRF).
+builder.AddSecureLabAntiforgery();
+
+// ЛР 6 (advanced, Redis): спільний лічильник policy "search" між екземплярами API.
+// Вмикається в будь-якому профілі ключем RateLimit:Search:Redis:ConnectionString; без нього —
+// локальний in-memory limiter і явний warning на старті (див. нижче після Build()).
+builder.Services.AddSingleton<RedisSearchQuotaStore>();
+
 // ЛР 3: обмеження частоти входів (політика "login"). Реєструється ДО builder.Build().
 // Значення читаються під час запиту, тому тести можуть змінювати їх через конфігурацію.
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // ЛР 6: узгоджений 429 для всіх policy — Problem Details + Retry-After; без імені облікового запису
+    // й без деталей partition (відповідь однакова для існуючого й неіснуючого користувача).
+    options.OnRejected = async (context, _) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter =
+                ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+        }
+
+        await Results.Problem(
+                title: "Забагато запитів",
+                detail: "Перевищено ліміт запитів. Повторіть пізніше.",
+                statusCode: StatusCodes.Status429TooManyRequests)
+            .ExecuteAsync(context.HttpContext);
+    };
+
     options.AddPolicy("login", httpContext =>
     {
         var permit = builder.Configuration.GetValue("RateLimit:Login:PermitLimit", 20);
         var window = builder.Configuration.GetValue("RateLimit:Login:WindowSeconds", 60);
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(window),
+                QueueLimit = 0
+            });
+    });
+
+    // ЛР 6 (добрий/відмінний): пошук. Partition — перевірений id користувача з auth-cookie
+    // (UseRateLimiter стоїть після UseAuthentication/UseAuthorization), а не IP (спільний для
+    // кількох людей) і не довільний header клієнта. Анонім сюди не доходить: маршрут вимагає login.
+    options.AddPolicy("search", httpContext =>
+    {
+        var permit = builder.Configuration.GetValue("RateLimit:Search:PermitLimit", 20);
+        var window = builder.Configuration.GetValue("RateLimit:Search:WindowSeconds", 60);
+        var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var partitionKey = userId is null ? "anonymous" : "user:" + userId;
+
+        // ЛР 6 (advanced): той самий quota/window і той самий OnRejected (429 + Retry-After),
+        // але лічильник — у Redis; при недоступності Redis limiter сам переходить на локальний.
+        var redisStore = httpContext.RequestServices.GetRequiredService<RedisSearchQuotaStore>();
+        if (redisStore.Enabled)
+        {
+            return RateLimitPartition.Get(
+                partitionKey,
+                key => new RedisFixedWindowSearchLimiter(redisStore, key, permit, TimeSpan.FromSeconds(window)));
+        }
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: partitionKey,
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permit,
@@ -69,6 +129,22 @@ builder.Services.Configure<Microsoft.AspNetCore.Routing.RouteHandlerOptions>(
 
 var app = builder.Build();
 
+// ЛР 6 (advanced): режим search limiter видно в журналі старту (без connection string).
+var searchQuotaStore = app.Services.GetRequiredService<RedisSearchQuotaStore>();
+if (searchQuotaStore.Enabled)
+{
+    app.Logger.LogInformation(
+        "Search rate limiter: Redis (спільний лічильник), key prefix {KeyPrefix}, пауза перепідключення {PauseSeconds} с.",
+        searchQuotaStore.KeyPrefix,
+        searchQuotaStore.ReconnectPauseSeconds);
+}
+else
+{
+    app.Logger.LogWarning(
+        "Search rate limiter: Redis не налаштовано (RateLimit:Search:Redis:ConnectionString); "
+        + "діє локальний in-memory limiter — кожен екземпляр API рахує запити окремо.");
+}
+
 var resetRequested = args.Contains("--reset-database", StringComparer.Ordinal);
 await DatabaseBootstrap.InitializeAsync(app.Services, app.Configuration, app.Environment, resetRequested);
 
@@ -77,11 +153,10 @@ if (resetRequested)
     return;
 }
 
-app.UseExceptionHandler();
-app.UseStatusCodePages();
-
-// ЛР 5: CSP з фактичних ресурсів клієнта (усе з власного origin, без inline-коду й стилів).
-// Спершу Content-Security-Policy-Report-Only, після перевірки — Content-Security-Policy.
+// ЛР 6 (F-02): заголовки безпеки ставимо через Response.OnStarting у middleware, що стоїть
+// ПЕРЕД UseExceptionHandler. Раніше блок стояв після нього, і на unexpected 500 exception handler
+// очищав відповідь (Response.Clear) разом із уже встановленими заголовками. OnStarting виконується
+// безпосередньо перед надсиланням headers, тож охоплює й error path.
 const string CspHeaderName = "Content-Security-Policy";
 const string Csp =
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
@@ -89,20 +164,29 @@ const string Csp =
 
 app.Use(async (context, next) =>
 {
-    context.Response.Headers.XContentTypeOptions = "nosniff";
-    context.Response.Headers.Append("Referrer-Policy", "no-referrer");
-
     // Виняток лише для Development-довідника Scalar (сторонній UI з власними inline-ресурсами).
     var isDevelopmentApiReference =
         app.Environment.IsDevelopment()
         && context.Request.Path.StartsWithSegments("/scalar");
-    if (!isDevelopmentApiReference)
+
+    context.Response.OnStarting(() =>
     {
-        context.Response.Headers[CspHeaderName] = Csp;
-    }
+        var headers = context.Response.Headers;
+        headers.XContentTypeOptions = "nosniff";
+        headers["Referrer-Policy"] = "no-referrer";
+        if (!isDevelopmentApiReference)
+        {
+            headers[CspHeaderName] = Csp;
+        }
+
+        return Task.CompletedTask;
+    });
 
     await next(context);
 });
+
+app.UseExceptionHandler();
+app.UseStatusCodePages();
 
 if (app.Environment.IsDevelopment())
 {
@@ -133,10 +217,11 @@ app.MapGet("/health", async (SecureLabDbContext dbContext, CancellationToken can
     .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
 app.MapIncidentEndpoints();
+app.MapCsrfToken();
 app.MapLab03Identity();
 app.MapLab02Endpoints();
 app.MapFallbackToFile("index.html");
 
 app.Run();
 
-public partial class Program;
+public partial class Program;

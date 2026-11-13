@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using SecureLab.Api.Data;
 using SecureLab.Api.Data.Entities;
+using SecureLab.Api.Presentation.Security;
 
 namespace SecureLab.Api.Scaffolding;
 
@@ -135,11 +136,12 @@ public static class Lab03Identity
 
         // ===== LOGOUT (добрий рівень, A-06) =====
         // Стандартний sign-out Identity: у відповідь додається Set-Cookie, що видаляє основну cookie.
+        // ЛР 6: logout належить cookie-периметру — filter перевіряє request token ДО SignOutAsync.
         app.MapPost("/api/auth/logout", async (SignInManager<ApplicationUser> signIn) =>
         {
             await signIn.SignOutAsync();
             return Results.NoContent();
-        });
+        }).RequireAntiforgeryToken();
 
         // ===== /api/me (етап 3, CP-02) =====
         // Було: довіряв заголовку X-Demo-UserId (навіть без cookie). Тепер: лише verified principal.

@@ -65,7 +65,8 @@ await (async () => {
     "А".repeat(3990)
   ];
   for (const [index, value] of positives.entries()) {
-    const created = await fetch("/api/incidents", {
+    // ЛР 6: створення довіряє auth-cookie -> спільний helper antiforgery (csrf.js) цієї сторінки.
+    const created = await window.SecureLabCsrf.mutate("/api/incidents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: `DOM-REG ${Date.now()} ${index}`, description: value,

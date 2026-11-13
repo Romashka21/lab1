@@ -1,4 +1,6 @@
 // ЛР 3: власний браузерний сценарій register -> login -> profile -> create -> logout.
+// ЛР 6: create і logout довіряють auth-cookie, тому йдуть через SecureLabCsrf.mutate (csrf.js);
+// register і login — звичайний fetch (вони не спираються на наявну auth-cookie, див. security-review SC-06/07).
 // Правила: лише same-origin fetch; текст у DOM тільки через textContent; пароль очищається після спроби;
 // ні логін, ні профіль, ні cookie не зберігаються в localStorage/sessionStorage і не друкуються в Console.
 
@@ -102,6 +104,7 @@ $("#login").addEventListener("submit", async event => {
   form.elements.password.value = "";
   try {
     const response = await apiFetch("/api/auth/login", jsonBody(data));
+    window.SecureLabCsrf.reset();   // новий principal -> старий request token недійсний
     result.textContent = `Login: ${response.status}`;
     await refreshState();
     if (response.status === 204) await loadProfile();
@@ -123,8 +126,14 @@ $("#incident").addEventListener("submit", async event => {
     severity: data.get("severity"),
     occurredAtUtc: new Date(data.get("occurredAt")).toISOString()
   };
+  let response;
   try {
-    const response = await apiFetch("/api/incidents", jsonBody(payload));
+    response = await window.SecureLabCsrf.mutate("/api/incidents", jsonBody(payload));
+  } catch {
+    incidentBox.textContent = "Не вдалося одержати antiforgery token: спершу увійдіть";
+    return;
+  }
+  try {
     const body = isJson(response) ? await response.json() : null;
     if (response.status === 201) {
       incidentBox.textContent = `201: створено «${body.title}» (статус ${body.status}), id ${body.id}`;
@@ -143,8 +152,15 @@ $("#incident").addEventListener("submit", async event => {
 
 // 4. Вихід: серверний sign-out, далі очищення UI і повторний /api/me (очікуємо 401).
 $("#logout").addEventListener("click", async () => {
+  let response;
   try {
-    const response = await apiFetch("/api/auth/logout", { method: "POST" });
+    response = await window.SecureLabCsrf.mutate("/api/auth/logout", { method: "POST" });
+  } catch {
+    result.textContent = "Logout: немає активного сеансу або токена";
+    return;
+  }
+  try {
+    window.SecureLabCsrf.reset();   // після logout токен попереднього користувача не використовуємо
     result.textContent = `Logout: ${response.status}`;
     clearProfile();
     await refreshState();

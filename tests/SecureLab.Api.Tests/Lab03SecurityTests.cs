@@ -278,7 +278,7 @@ public sealed class Lab03SecurityTests(SecureLabApiFactory factory) : IClassFixt
         var title = $"A04-{Guid.NewGuid():N}";
         try
         {
-            using var bob = await factory.LoginAsync("bob", SeedPassword);
+            using var bob = await factory.LoginWithCsrfAsync("bob", SeedPassword);   // ЛР 6: + request token
             using var response = await bob.PostAsJsonAsync("/api/incidents", IncidentBody(title));
 
             Assert.Equal(HttpStatusCode.Created, response.StatusCode);
@@ -295,7 +295,7 @@ public sealed class Lab03SecurityTests(SecureLabApiFactory factory) : IClassFixt
         var title = $"A05-{Guid.NewGuid():N}";
         try
         {
-            using var bob = await factory.LoginAsync("bob", SeedPassword);
+            using var bob = await factory.LoginWithCsrfAsync("bob", SeedPassword);   // ЛР 6: + request token
             var forged = new Dictionary<string, object?> { ["ownerUserId"] = DbSeeder.AliceId };
             using var response = await bob.PostAsJsonAsync("/api/incidents", IncidentBody(title, forged));
 
@@ -320,7 +320,8 @@ public sealed class Lab03SecurityTests(SecureLabApiFactory factory) : IClassFixt
     [Fact]
     public async Task A06_Logout_ThenProtectedRequest_Returns401()
     {
-        using var alice = await factory.LoginAsync("alice", SeedPassword);
+        // ЛР 6: logout входить до cookie-периметра, тому легітимний logout іде з request token.
+        using var alice = await factory.LoginWithCsrfAsync("alice", SeedPassword);
         using (var before = await alice.GetAsync("/api/auth/session-check"))
             Assert.Equal(HttpStatusCode.NoContent, before.StatusCode);
 

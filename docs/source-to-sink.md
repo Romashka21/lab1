@@ -1,7 +1,8 @@
 # Карта source-to-sink — ЛР 5
 
 Студент: Дриг Роман Андрійович, КБ-43. Сценарій 2-A, рівень «Відмінно».
-Стан: vulnerable — commit встановлення scaffold `lab-05-start-v1`; fixed — commit заміни sinks у `browser-lab.js`.
+Стан: vulnerable — `4bff1ce` (встановлення scaffold `lab-05-start-v1`); seed коментаря — `4353b68`; fixed — `8c66351` (заміна sinks у `browser-lab.js`); CORS/CSP — `e6f10b7` = тег `v0.5.0`.
+Докази (DB/API/DOM, до і після) — `docs/browser-security-evidence.md`.
 
 ## Потік 1 (для всіх): Incident.Description
 

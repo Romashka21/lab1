@@ -485,10 +485,24 @@
           "Npgsql": "10.0.3"
         }
       },
+      "Pipelines.Sockets.Unofficial": {
+        "type": "Transitive",
+        "resolved": "2.2.8",
+        "contentHash": "zG2FApP5zxSx6OcdJQLbZDk2AVlN2BNQD6MorwIfV6gVj0RRxWPEp2LXAxqDGZqeNV1Zp0BNPcNaey/GXmTdvQ=="
+      },
       "Scalar.AspNetCore": {
         "type": "Transitive",
         "resolved": "2.16.16",
         "contentHash": "Ax0e0bIh+Upf92k1+pTBUom3e/kbpu20qsrDYmmS1NM721Eq2xF8c789x6IbiNrvW8WwySRzPv/icYYhb6idSg=="
+      },
+      "StackExchange.Redis": {
+        "type": "Transitive",
+        "resolved": "2.8.16",
+        "contentHash": "WaoulkOqOC9jHepca3JZKFTqndCWab5uYS7qCzmiQDlrTkFaDN7eLSlEfHycBxipRnQY9ppZM7QSsWAwUEGblw==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "6.0.0",
+          "Pipelines.Sockets.Unofficial": "2.2.8"
+        }
       },
       "System.Diagnostics.EventLog": {
         "type": "Transitive",
@@ -544,7 +558,8 @@
           "Microsoft.EntityFrameworkCore.Relational": "[10.0.10, )",
           "Microsoft.OpenApi": "[2.7.5, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
-          "Scalar.AspNetCore": "[2.16.16, )"
+          "Scalar.AspNetCore": "[2.16.16, )",
+          "StackExchange.Redis": "[2.8.16, )"
         }
       }
     }

@@ -23,7 +23,9 @@ public sealed class Lab02SecurityTests(SecureLabApiFactory factory)
     private static string SeedPassword =>
         Environment.GetEnvironmentVariable("SeedUsers__Password")
         ?? throw new InvalidOperationException("Set local SeedUsers__Password outside Git.");
-    private async Task<HttpClient> AuthAsync() => _auth ??= await factory.LoginAsync("bob", SeedPassword);
+    // ЛР 6: Bob виконує дозволені POST -> одержує request token тим самим cookie-клієнтом.
+    // Тести валідації (T-02, T-09…) тепер доходять до перевірки DTO з чинним токеном.
+    private async Task<HttpClient> AuthAsync() => _auth ??= await factory.LoginWithCsrfAsync("bob", SeedPassword);
     public void Dispose()
     {
         _auth?.Dispose();

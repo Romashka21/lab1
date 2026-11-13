@@ -5,6 +5,7 @@ using SecureLab.Api.Application.Incidents;
 using SecureLab.Api.Data;
 using SecureLab.Api.Data.Entities;
 using SecureLab.Api.Presentation.Contracts;
+using SecureLab.Api.Presentation.Security;
 
 namespace SecureLab.Api.Scaffolding;
 
@@ -71,7 +72,7 @@ public static class Lab02Endpoints
                 .ToListAsync(ct);
 
             return Results.Ok(items);
-        }).RequireAuthorization();
+        }).RequireAuthorization().RequireRateLimiting("search");   // ЛР 6: per-user quota
 
         // 2. ЗАХИЩЕНИЙ POST (ЕТАП 2)
         app.MapPost("/api/incidents", async (CreateIncidentRequest request, HttpContext httpContext, SecureLabDbContext db, CancellationToken ct) =>
@@ -133,10 +134,13 @@ public static class Lab02Endpoints
 
             var occurredAtUtc = request.OccurredAtUtc!.Value.ToUniversalTime();
 
-            // 7. Конфлікт (T-03): активний дублікат за title (з урахуванням регістру); Closed не блокує
+            // 7. Конфлікт (T-03): активний дублікат за title (з урахуванням регістру); Closed не блокує.
+            // ЛР 6 (F-03): лише серед інцидентів ТОГО САМОГО власника. Глобальна перевірка відповідала 409
+            // на назву чужого інциденту й розкривала його існування всупереч політиці 404 (A-10).
             var hasActiveDuplicate = await db.Incidents
                 .AsNoTracking()
-                .AnyAsync(item => item.Title == title &&
+                .AnyAsync(item => item.OwnerUserId == ownerUserId &&
+                                  item.Title == title &&
                                   (item.Status == IncidentStatus.New ||
                                    item.Status == IncidentStatus.Triaged ||
                                    item.Status == IncidentStatus.InProgress ||
@@ -177,7 +181,7 @@ public static class Lab02Endpoints
                 incident.CreatedAtUtc);
 
             return Results.Created($"/api/incidents/{incident.Id}", response);
-        }).RequireAuthorization();
+        }).RequireAuthorization().RequireAntiforgeryToken();   // ЛР 6: explicit antiforgery
     }
 
     // Екранування метасимволів LIKE: \ -> \\, % -> \%, _ -> \_

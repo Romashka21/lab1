@@ -6,6 +6,7 @@ using SecureLab.Api.Application.Incidents;
 using SecureLab.Api.Data;
 using SecureLab.Api.Data.Entities;
 using SecureLab.Api.Presentation.Contracts;
+using SecureLab.Api.Presentation.Security;
 
 namespace SecureLab.Api.Presentation.Endpoints;
 
@@ -34,7 +35,10 @@ public static class IncidentEndpoints
             .WithName("GetSeveritySummary")
             .Produces<IReadOnlyList<IncidentSeveritySummaryResponse>>();
 
+        // ЛР 6: кожен cookie-authenticated mutation маршрут — explicit antiforgery validation.
+        // Filter додано до окремих маршрутів, а не до групи: GET-маршрути токена не потребують.
         group.MapPut("/{id:guid}", UpdateAsync)
+            .RequireAntiforgeryToken()
             .WithName("UpdateIncident")
             .Produces<IncidentListItemResponse>()
             .ProducesValidationProblem()
@@ -43,12 +47,14 @@ public static class IncidentEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict);
 
         group.MapDelete("/{id:guid}", DeleteAsync)
+            .RequireAntiforgeryToken()
             .WithName("DeleteIncident")
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
         group.MapPost("/{id:guid}/triage", TriageAsync)
+            .RequireAntiforgeryToken()
             .WithName("TriageIncident")
             .Produces<TriageIncidentResponse>()
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -214,6 +220,7 @@ public static class IncidentEndpoints
         var hasActiveDuplicate = await db.Incidents
             .AsNoTracking()
             .AnyAsync(item => item.Id != incident.Id
+                              && item.OwnerUserId == incident.OwnerUserId   // ЛР 6 (F-03): лише власні
                               && item.Title == title
                               && (item.Status == IncidentStatus.New
                                   || item.Status == IncidentStatus.Triaged
@@ -333,6 +340,9 @@ public static class IncidentEndpoints
         });
         await db.SaveChangesAsync(cancellationToken);
 
+        // ЛР 6: audit trail дозволеного privileged transition у тому самому каналі SecureLab.Audit,
+        // що й відмова: subject, action, resource, result, time, traceId. Note і body не логуються.
+        WriteAllowedAudit(loggerFactory.CreateLogger("SecureLab.Audit"), httpContext, "incident.triage", incident.Id);
         return Results.Ok(new TriageIncidentResponse(incident.Id, incident.Status.ToString()));
     }
 
@@ -385,6 +395,20 @@ public static class IncidentEndpoints
             action,
             resourceId,
             "denied",
+            DateTimeOffset.UtcNow,
+            Activity.Current?.Id ?? httpContext.TraceIdentifier);
+    }
+
+    // ЛР 6: подія для ДОЗВОЛЕНОГО privileged transition — той самий формат і канал, що й відмова.
+    private static void WriteAllowedAudit(ILogger logger, HttpContext httpContext, string action, Guid resourceId)
+    {
+        logger.LogInformation(
+            "authorization.allowed subject={SubjectId} action={Action} resource={ResourceId} "
+            + "result={Result} occurredAtUtc={OccurredAtUtc:O} traceId={TraceId}",
+            httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier),
+            action,
+            resourceId,
+            "succeeded",
             DateTimeOffset.UtcNow,
             Activity.Current?.Id ?? httpContext.TraceIdentifier);
     }

@@ -16,10 +16,11 @@ Starter навмисно не містить завершених рішень �
 
 ## 1. Передумови
 
-- .NET SDK `10.0.302` (зафіксовано у `global.json`);
+- .NET SDK 10, стабільний feature band `10.0.1xx` або новіший (`global.json`: `10.0.100`,
+  `rollForward: latestFeature`; перевірено на `10.0.401`);
 - Docker із підтримкою `docker compose`;
 - Git;
-- вільні локальні порти `5080` і `54329`.
+- вільні локальні порти `5080` і `54329`; для advanced-сценарію ЛР 6 ще `5081` і `6379` (Redis).
 
 Перевірте:
 
@@ -129,10 +130,87 @@ docs/                    карта архітектури, варіант, ма
 | Ознака | Перевірка |
 |---|---|
 | `connection refused` до PostgreSQL | `docker compose ... ps`, порт `54329`, стан healthcheck |
-| SDK не знайдено | `dotnet --version` має повернути `10.0.302` у цій директорії |
+| SDK не знайдено | `dotnet --version` у цій директорії має повернути стабільну `10.0.*` не нижче `10.0.100` |
 | порт API зайнятий | зупиніть інший процес на `5080` або задайте `ASPNETCORE_URLS` |
 | migration не застосовується | перевірте `ASPNETCORE_ENVIRONMENT=Development` і connection string |
 | змінили credentials у compose | узгоджено перевизначте `ConnectionStrings__SecureLab`; не записуйте реальне значення до Git |
 
 Перед commit перегляньте `git status`, `git diff --staged` і переконайтеся, що
 до Git не потрапили `.env`, cookies, tokens, реальні passwords, dumps або logs.
+
+## 8. ЛР 6: hardening, security review і регресія (`v1.0.0`)
+
+Документи огляду: `docs/security-review.md`, `docs/threat-model.md`, `docs/findings/F-0*.md`,
+погодження advanced variant — `docs/evidence/lab06-redis-approval.md`.
+
+### Пароль seed і заборони
+
+Пароль навчальних акаунтів задавайте лише в поточному вікні PowerShell і не друкуйте:
+
+```powershell
+$secure = Read-Host "Seed password" -AsSecureString
+$env:SeedUsers__Password = [System.Net.NetworkCredential]::new("", $secure).Password
+Remove-Variable secure
+$env:SeedUsers__Password.Length
+```
+
+До Git, звітів і скріншотів не потрапляють паролі, значення cookie
+(`.AspNetCore.Identity.Application`, `SecureLab.Antiforgery`), значення header
+`X-SecureLab-CSRF`, журнали API й реальні connection strings.
+
+### Antiforgery (CSRF)
+
+Кожна cookie-authenticated мутація (`POST/PUT/DELETE /api/incidents…`, `POST …/triage`,
+`POST /api/auth/logout`) вимагає header `X-SecureLab-CSRF` з токеном від
+`GET /api/auth/csrf-token` (лише після входу). Без валідної пари — `400` Problem Details.
+Сторінки клієнта підключають `Client/csrf.js` і роблять мутації через
+`window.SecureLabCsrf.mutate(url, options)`; власні сторінки мають робити так само.
+Login і register токена не потребують.
+
+### Redis для спільного search limiter (advanced variant)
+
+```powershell
+docker run -d --name securelab-redis -p 127.0.0.1:6379:6379 redis:7.4-alpine
+docker exec securelab-redis redis-cli PING
+```
+
+API вмикає Redis у будь-якому профілі, якщо задано
+`RateLimit__Search__Redis__ConnectionString` (наприклад, `127.0.0.1:6379`); без нього на старті
+пишеться warning і діє локальний limiter. Quota — `RateLimit:Search:PermitLimit` /
+`WindowSeconds` (`appsettings.json`: 20 за 60 с). Якщо Redis недоступний, API не повертає 500:
+тимчасово діє локальний limiter тієї самої quota, один warning на відмову, info при відновленні.
+
+Демонстрація на двох production-like екземплярах (кожна команда — в окремому вікні, після
+`dotnet build SecureLab.sln -c Release`):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-production-instance.ps1 -Port 5080
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-production-instance.ps1 -Port 5081
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\redis-search-demo.ps1 -Scenario shared
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\redis-search-demo.ps1 -Scenario outage
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\redis-search-demo.ps1 -Scenario recovery
+```
+
+`outage` виконуйте після `docker stop securelab-redis`, `recovery` — після
+`docker start securelab-redis` і паузи 12 с. `-NoRedis` у першій команді показує warning
+режиму без Redis.
+
+### Повна регресія
+
+Передумови: PostgreSQL Healthy, Redis запущено, пароль seed задано, API зупинено.
+
+```powershell
+dotnet restore SecureLab.sln --locked-mode
+dotnet build SecureLab.sln -c Release
+dotnet run --project src/SecureLab.Api -- --reset-database
+dotnet test SecureLab.sln -c Release
+dotnet test SecureLab.sln -c Release --filter "FullyQualifiedName~RegCsrf01"
+```
+
+Очікувано `total: 63; failed: 0` і окремо `Passed: 1` для повного REG-CSRF-01. Тести
+REG-REDIS-01/02 потребують живого Redis (`SECURELAB_TEST_REDIS=host:port`, за замовчуванням
+`127.0.0.1:6379`). DOM-регресію XSS (`tests/browser/description-dom.js`) запускають у Console
+сторінки `browser-lab.html` після входу (`PASS: 31 checks`).
+
+Якщо після копіювання файлів збірка поводиться як стара версія, примусово перезберіть:
+`dotnet build SecureLab.sln --no-incremental`.
