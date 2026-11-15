@@ -167,7 +167,51 @@ public sealed class Lab06SecurityTests(SecureLabApiFactory factory) : IClassFixt
         }
     }
 
+    [Fact]
+    public async Task RegCsrf04_Logout_WithoutToken_KeepsSession_WithToken_EndSession()
+    {
+        HttpStatusCode[] expected =
+        [
+            HttpStatusCode.BadRequest,
+            HttpStatusCode.NoContent,
+            HttpStatusCode.NoContent,
+            HttpStatusCode.Unauthorized
+        ];
+        var trace = new List<HttpStatusCode>();
+        const string AuthCookie = ".AspNetCore.Identity.Application=";
+        using var alice = await factory.LoginAsync("alice", SeedPassword);
+        using (var negative = await alice.PostAsync("/api/auth/logout", null))
+        {
+            trace.Add(negative.StatusCode);
+            await AssertAntiforgeryRejectionAsync(negative);
+            var cookies = negative.Headers.TryGetValues("Set-Cookie", out var values) ? values : Enumerable.Empty<string>();
+            Assert.DoesNotContain(cookies, value => value.StartsWith(AuthCookie, StringComparison.Ordinal));
+        }
+        using (var afterNegative = await alice.GetAsync("/api/auth/session-check"))
+        {
+            trace.Add(afterNegative.StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent, afterNegative.StatusCode);
+
+        }
+        await alice.UseAntiforgeryTokenAsync();
+        using (var positive = await alice.PostAsync("/api/auth/logout", null))
+        {
+            trace.Add(positive.StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent, positive.StatusCode);
+            Assert.Contains(positive.Headers.GetValues("Set-Cookie"),
+            value => value.StartsWith(AuthCookie, StringComparison.Ordinal));
+        }
+        using (var afterPositive = await alice.GetAsync("/api/auth/session-check"))
+        {
+            trace.Add(afterPositive.StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, afterPositive.StatusCode);
+        }
+        Assert.Equal(expected, trace);
+    }
     // ------------------------------------------------------------------ REG-CSRF-03 (прив'язка токена)
+
+
+
 
     [Fact]
     public async Task RegCsrf03_TokenFromAnotherSession_IsRejected_AndTokenRouteRequiresLogin()
